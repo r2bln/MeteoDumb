@@ -2,25 +2,18 @@
 // стоковый адрес был 0x77, у китайского модуля адрес 0x76.
 // Так что если юзаете НЕ библиотеку из архива - не забудьте поменять
 
-// если дисплей не заводится - поменяйте адрес (строка 54)
-
-// lcd
-#include <LiquidCrystal.h>
-
-// Задаём имя пинов дисплея
-constexpr uint8_t PIN_RS = 6;
-constexpr uint8_t PIN_EN = 7;
-constexpr uint8_t PIN_DB4 = 8;
-constexpr uint8_t PIN_DB5 = 9;
-constexpr uint8_t PIN_DB6 = 10;
-constexpr uint8_t PIN_DB7 = 11;
-
-LiquidCrystal lcd(PIN_RS, PIN_EN, PIN_DB4, PIN_DB5, PIN_DB6, PIN_DB7);
-
 // sensor
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
 #define SEALEVELPRESSURE_HPA (1013.25)
 Adafruit_BME280 bme;
 
@@ -32,21 +25,27 @@ void readSensors() {
   dispHum = bme.readHumidity();
   dispPres = (float)bme.readPressure() * 0.00750062;
  
-  // Устанавливаем размер экрана
-  // Количество столбцов и строк
-  lcd.begin(16, 2);
-  // Устанавливаем курсор в колонку 0 и строку 0
-  lcd.setCursor(0, 0);
-  // Печатаем первую строку
-  lcd.print("t" + String(dispTemp) + "C h" + String(dispHum) + "%");
-  // Устанавливаем курсор в колонку 0 и строку 1
-  lcd.setCursor(0, 1);
-  // Печатаем вторую строку
-  lcd.print("pr " + String(dispPres) + "mm/hg");
+  display.clearDisplay();
+  display.setCursor(0, 10);
+  display.println("Temp: " + String(dispTemp) + "C");
+  display.setCursor(0, 20);
+  display.println("Humidity: " + String(dispHum) + "%");
+  display.setCursor(0, 30);
+  display.println("Pressure: " + String(dispPres) + "mm/hg");
+  display.display(); 
 }
 
 void setup() {
-  // put your setup code here, to run once:
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;);
+  }
+
+  delay(2000);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+
   bme.begin(&Wire);
   bme.setSampling(Adafruit_BME280::MODE_FORCED,
                   Adafruit_BME280::SAMPLING_X1, // temperature
@@ -58,7 +57,6 @@ void setup() {
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
   readSensors();
   delay(1000);
 }
