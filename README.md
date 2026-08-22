@@ -91,3 +91,50 @@ sudo make uninstall
 
 Останавливает и дизейблит сервис, удаляет unit-файл, бинарник,
 `/etc/default/meteo-exporter` и `meteo.prom`.
+
+## aprs-beacon
+
+Headless APRS-точка (см. METEO-2): раз в `APRS_INTERVAL` секунд (по
+умолчанию 600) читает `meteo.prom` и шлёт position+weather report пакет
+в APRS-IS (`rotate.aprs2.ru:14580` по умолчанию) — без радио, чистый
+интернет-клиент. Появляется на aprs.fi/aprs-map.info как погодная
+станция. Реализация на stdlib (`socket`), без внешних Python-зависимостей.
+
+Позывной, координаты и APRS-IS passcode — данные конкретного места и
+пользователя, в репозиторий не коммитятся; передаются параметрами `make`
+и оседают в `/etc/default/aprs-beacon` на самой машине.
+
+**Установка (только раскладывает файлы, ничего не отправляет в эфир):**
+
+```
+sudo make aprs-install APRS_CALLSIGN=R2BLN-13 APRS_LAT=55.9328 APRS_LON=36.0184
+```
+
+Опционально: `APRS_SERVER` (по умолчанию `rotate.aprs2.ru:14580`),
+`APRS_INTERVAL` (по умолчанию `600`), `APRS_COMMENT`, `APRS_PASSCODE`
+(если не передан — считается скриптом от `APRS_CALLSIGN` на лету).
+
+**Активация/деактивация** — отдельно от install/uninstall, потому что
+именно этот шаг реально начинает публично транслировать координаты дачи
+в сеть APRS-IS:
+
+```
+sudo make aprs-activate     # начать слать маяки
+sudo make aprs-deactivate   # прекратить (конфиг и файлы остаются)
+```
+
+**Проверка, что маяк реально уходит:**
+
+```
+make aprs-check
+```
+
+Смотрит на файл `/var/lib/aprs-beacon/last-sent`, который скрипт
+обновляет только при успешной отправке пакета в APRS-IS.
+
+**Удаление** (останавливает, если ещё активен, и чистит всё, включая
+`/etc/default/aprs-beacon`):
+
+```
+sudo make aprs-uninstall
+```

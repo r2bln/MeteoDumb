@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic trigger for aprs-beacon.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=600
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

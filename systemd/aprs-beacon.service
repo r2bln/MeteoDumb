@@ -1,0 +1,10 @@
+[Unit]
+Description=MeteoDumb APRS-IS weather beacon (one-shot, triggered by aprs-beacon.timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/aprs-beacon
+ExecStart=/usr/local/bin/aprs-beacon
+StateDirectory=aprs-beacon

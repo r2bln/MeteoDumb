@@ -15,7 +15,25 @@ DEFAULTS_FILE := /etc/default/$(SERVICE_NAME)
 
 NODE_EXPORTER_SERVICES := prometheus-node-exporter node_exporter node-exporter
 
-.PHONY: install uninstall check-node-exporter check-tty check
+APRS_BIN_NAME      := aprs-beacon
+APRS_SERVICE_NAME  := aprs-beacon
+APRS_SCRIPT        := aprs-beacon.py
+APRS_SERVICE_UNIT  := systemd/aprs-beacon.service
+APRS_TIMER_UNIT    := systemd/aprs-beacon.timer
+APRS_DEFAULTS_FILE := /etc/default/aprs-beacon
+APRS_STATE_DIR     := /var/lib/aprs-beacon
+APRS_STATE_FILE    := $(APRS_STATE_DIR)/last-sent
+
+APRS_CALLSIGN ?=
+APRS_LAT      ?=
+APRS_LON      ?=
+APRS_PASSCODE ?=
+APRS_SERVER   ?= rotate.aprs2.ru:14580
+APRS_INTERVAL ?= 600
+APRS_COMMENT  ?= MeteoDumb/wakkanai
+
+.PHONY: install uninstall check-node-exporter check-tty check \
+        aprs-install aprs-activate aprs-deactivate aprs-uninstall aprs-check check-aprs-config
 
 install: check-node-exporter check-tty
 	install -d -m 0755 $(TEXTFILE_DIR)
@@ -89,3 +107,73 @@ uninstall:
 	systemctl daemon-reload
 	rm -f $(PROM_FILE)
 	@echo "Uninstalled."
+
+# --- aprs-beacon (METEO-2) -------------------------------------------------
+#
+# install/uninstall only stage files and config - they never touch APRS-IS.
+# activate/deactivate is the separate, explicit switch that starts/stops
+# actually broadcasting the configured position to the public APRS-IS network.
+
+check-aprs-config:
+	@if [ -z "$(APRS_CALLSIGN)" ] || [ -z "$(APRS_LAT)" ] || [ -z "$(APRS_LON)" ]; then \
+		echo "ERROR: APRS_CALLSIGN, APRS_LAT and APRS_LON are required, e.g.:"; \
+		echo "  sudo make aprs-install APRS_CALLSIGN=R2BLN-13 APRS_LAT=55.9328 APRS_LON=36.0184"; \
+		exit 1; \
+	fi
+	@command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found."; exit 1; }
+
+aprs-install: check-aprs-config
+	install -d -m 0755 $(APRS_STATE_DIR)
+	install -m 0755 $(APRS_SCRIPT) $(BINDIR)/$(APRS_BIN_NAME)
+	install -m 0644 $(APRS_SERVICE_UNIT) $(UNITDIR)/$(APRS_SERVICE_NAME).service
+	sed 's/^OnUnitActiveSec=.*/OnUnitActiveSec=$(APRS_INTERVAL)/' $(APRS_TIMER_UNIT) > $(UNITDIR)/$(APRS_SERVICE_NAME).timer
+	chmod 0644 $(UNITDIR)/$(APRS_SERVICE_NAME).timer
+	{ \
+		printf 'APRS_CALLSIGN=%s\n' "$(APRS_CALLSIGN)"; \
+		printf 'APRS_LAT=%s\n' "$(APRS_LAT)"; \
+		printf 'APRS_LON=%s\n' "$(APRS_LON)"; \
+		printf 'APRS_SERVER=%s\n' "$(APRS_SERVER)"; \
+		printf 'APRS_COMMENT=%s\n' "$(APRS_COMMENT)"; \
+		printf 'METEO_TEXTFILE_DIR=%s\n' "$(TEXTFILE_DIR)"; \
+		if [ -n "$(APRS_PASSCODE)" ]; then printf 'APRS_PASSCODE=%s\n' "$(APRS_PASSCODE)"; fi; \
+	} > $(APRS_DEFAULTS_FILE)
+	chmod 0644 $(APRS_DEFAULTS_FILE)
+	systemctl daemon-reload
+	@echo "Installed (not activated) - nothing has been sent to APRS-IS."
+	@echo "Review $(APRS_DEFAULTS_FILE), then run: sudo make aprs-activate"
+
+aprs-activate:
+	systemctl enable --now $(APRS_SERVICE_NAME).timer
+	@echo "Activated: $(APRS_SERVICE_NAME).timer will beacon every $(APRS_INTERVAL)s from now on."
+	@echo "This publicly broadcasts the configured position on APRS-IS. Verify with: make aprs-check"
+
+aprs-deactivate:
+	-systemctl disable --now $(APRS_SERVICE_NAME).timer
+	@echo "Deactivated - no more beacons will be sent. Config and files left in place."
+	@echo "Re-enable any time with: sudo make aprs-activate"
+
+aprs-uninstall: aprs-deactivate
+	rm -f $(UNITDIR)/$(APRS_SERVICE_NAME).service
+	rm -f $(UNITDIR)/$(APRS_SERVICE_NAME).timer
+	rm -f $(BINDIR)/$(APRS_BIN_NAME)
+	rm -f $(APRS_DEFAULTS_FILE)
+	systemctl daemon-reload
+	rm -rf $(APRS_STATE_DIR)
+	@echo "Uninstalled."
+
+aprs-check:
+	@if [ ! -f "$(APRS_STATE_FILE)" ]; then \
+		echo "ERROR: $(APRS_STATE_FILE) does not exist yet."; \
+		echo "Has aprs-beacon.timer fired since activation? (systemctl list-timers $(APRS_SERVICE_NAME).timer)"; \
+		exit 1; \
+	fi
+	@ts=$$(cat "$(APRS_STATE_FILE)"); \
+	now=$$(date +%s); \
+	age=$$(( now - ts )); \
+	stale=$$(( $(APRS_INTERVAL) * 2 )); \
+	if [ "$$age" -gt "$$stale" ]; then \
+		echo "ERROR: last successful beacon was $${age}s ago (> $${stale}s)."; \
+		echo "Check: journalctl -u $(APRS_SERVICE_NAME).service"; \
+		exit 1; \
+	fi; \
+	echo "OK: last beacon sent $${age}s ago."
