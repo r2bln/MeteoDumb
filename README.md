@@ -40,7 +40,8 @@ serial-порта (`SensorSerial.ino`) и поддерживает файл дл
 - `meteo_last_reading_timestamp_seconds` — unix-время последнего успешно
   распарсенного показания (для контроля устаревания данных)
 
-**Переменные окружения** (можно задать в `/etc/default/meteo-exporter`):
+**Переменные окружения** (пишутся инсталлятором в `/etc/default/meteo-exporter`,
+можно править вручную и потом `systemctl restart meteo-exporter`):
 
 - `METEO_DEVICE` (по умолчанию `/dev/ttyUSB0`)
 - `METEO_BAUD` (по умолчанию `115200`)
@@ -53,10 +54,34 @@ serial-порта (`SensorSerial.ino`) и поддерживает файл дл
 sudo make install
 ```
 
-Проверяет, что `prometheus-node-exporter` (или `node_exporter`/`node-exporter`)
-уже установлен и запущен, создаёт `$METEO_TEXTFILE_DIR`, копирует скрипт в
-`/usr/local/bin/meteo-exporter` и unit-файл в `/etc/systemd/system/`, включает
-и запускает сервис.
+Перед установкой проверяет:
+- что `prometheus-node-exporter` (или `node_exporter`/`node-exporter`) уже
+  установлен и активен (`check-node-exporter`)
+- что serial-устройство (`DEVICE`, по умолчанию `/dev/ttyUSB0`) присутствует,
+  является character-устройством и доступно на чтение/запись (`check-tty`)
+
+Затем создаёт `$METEO_TEXTFILE_DIR`, копирует скрипт в
+`/usr/local/bin/meteo-exporter`, unit-файл в `/etc/systemd/system/`, пишет
+`/etc/default/meteo-exporter` с текущими `DEVICE`/`BAUD`/`TEXTFILE_DIR`,
+включает и запускает сервис.
+
+Пути и устройство можно переопределить прямо при вызове, например:
+
+```
+sudo make install DEVICE=/dev/ttyUSB1 BAUD=115200
+```
+
+**Проверка, что данные реально идут:**
+
+```
+make check
+```
+
+Смотрит на метрику `meteo_last_reading_timestamp_seconds` в `.prom` файле и
+проверяет, что последнее показание не старше `STALE_SECS` (по умолчанию 15
+секунд — датчик шлёт данные раз в секунду). Никакого рестарта
+`prometheus-node-exporter` для этого не требуется: textfile collector сам
+перечитывает директорию с `.prom` файлами при каждом scrape'е.
 
 **Удаление:**
 
@@ -64,4 +89,5 @@ sudo make install
 sudo make uninstall
 ```
 
-Останавливает и дизейблит сервис, удаляет unit-файл, бинарник и `meteo.prom`.
+Останавливает и дизейблит сервис, удаляет unit-файл, бинарник,
+`/etc/default/meteo-exporter` и `meteo.prom`.
