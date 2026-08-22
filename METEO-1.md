@@ -1,5 +1,14 @@
 # METEO-1: systemctl module установка и экспорт
 
+**Статус: Done (2026-08-22)**
+
+Реализовано: `meteo-exporter.sh`, `systemd/meteo-exporter.service`, `Makefile`
+(`install`/`uninstall`/`check`/`check-tty`/`check-node-exporter`). Развёрнуто и
+проверено на боевой машине (wakkanai): `make check` показывает свежие
+показания, `curl localhost:9100/metrics | grep ^meteo_` отдаёт
+`meteo_temperature_celsius`, `meteo_humidity_percent`, `meteo_pressure_pascals`,
+`meteo_last_reading_timestamp_seconds`.
+
 В этом репозитории необходимо реализовать скрипт получения данных с рудиментарной метеостанции - датчика из
 SensorSerial.ino который бы получал данные следующим образом
 
