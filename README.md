@@ -20,3 +20,48 @@
 **Arduino IDE:** Board = `ESP32 Dev Module`, Port = `/dev/ttyUSB0`.
 
 Скетч пробует адреса 0x76 и 0x77 по очереди, так что менять исходники библиотеки (как раньше делали для Sensor.ino) не нужно.
+
+## meteo-exporter
+
+Демон на bash, который читает строки вида `T=19.56C  P=985.14hPa  H=63.07%` с
+serial-порта (`SensorSerial.ino`) и поддерживает файл для textfile collector
+`prometheus-node-exporter` в актуальном состоянии.
+
+Порт открывается один раз на весь жизненный цикл процесса (а не на каждое
+чтение), чтобы не дёргать DTR/RTS и не ресетить ESP32 лишний раз. При
+пропадании устройства процесс завершается, а `systemd` (`Restart=always`)
+перезапускает его.
+
+**Метрики** (в `/var/lib/prometheus/node-exporter/meteo.prom` по умолчанию):
+
+- `meteo_temperature_celsius`
+- `meteo_humidity_percent`
+- `meteo_pressure_pascals`
+- `meteo_last_reading_timestamp_seconds` — unix-время последнего успешно
+  распарсенного показания (для контроля устаревания данных)
+
+**Переменные окружения** (можно задать в `/etc/default/meteo-exporter`):
+
+- `METEO_DEVICE` (по умолчанию `/dev/ttyUSB0`)
+- `METEO_BAUD` (по умолчанию `115200`)
+- `METEO_TEXTFILE_DIR` (по умолчанию `/var/lib/prometheus/node-exporter`)
+- `METEO_OUTFILE` (по умолчанию `$METEO_TEXTFILE_DIR/meteo.prom`)
+
+**Установка:**
+
+```
+sudo make install
+```
+
+Проверяет, что `prometheus-node-exporter` (или `node_exporter`/`node-exporter`)
+уже установлен и запущен, создаёт `$METEO_TEXTFILE_DIR`, копирует скрипт в
+`/usr/local/bin/meteo-exporter` и unit-файл в `/etc/systemd/system/`, включает
+и запускает сервис.
+
+**Удаление:**
+
+```
+sudo make uninstall
+```
+
+Останавливает и дизейблит сервис, удаляет unit-файл, бинарник и `meteo.prom`.

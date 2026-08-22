@@ -1,0 +1,14 @@
+[Unit]
+Description=MeteoDumb BME280 serial to prometheus-node-exporter textfile bridge
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/meteo-exporter
+ExecStart=/usr/local/bin/meteo-exporter
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
