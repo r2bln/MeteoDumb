@@ -53,7 +53,12 @@ check-tty:
 		exit 1; \
 	fi
 	@if [ ! -r "$(DEVICE)" ] || [ ! -w "$(DEVICE)" ]; then \
-		echo "ERROR: no read/write access to $(DEVICE). Run as root (sudo make install) or add the user to the dialout group."; \
+		user="$${SUDO_USER:-$$(id -un)}"; \
+		echo "ERROR: no read/write access to $(DEVICE) for user '$$user'."; \
+		echo "Add the user to the group that owns the device and re-login, e.g.:"; \
+		echo "  sudo usermod -aG $$(stat -c '%G' $(DEVICE)) $$user"; \
+		echo "(log out and back in, or run 'newgrp $$(stat -c '%G' $(DEVICE))', for the group change to take effect)"; \
+		echo "Alternatively, run 'sudo make install' so the check and the service itself use root."; \
 		exit 1; \
 	fi
 	@echo "Serial device $(DEVICE) is present and accessible."
