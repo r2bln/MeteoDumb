@@ -1,6 +1,12 @@
 # METEO-2: Headless APRS-маяк (погодный отчёт в APRS-IS)
 
-**Статус: Open**
+**Статус: Done (2026-08-22)**
+
+Развёрнуто и подтверждено на боевой машине (wakkanai): `make aprs-install`
++ `make aprs-activate` выполнены, станция `R2BLN-13` видна на
+aprs-map.info (id 921438) как Weather Station с координатами дачи и
+комментарием `MeteoDumb/wakkanai`, путь пакета
+`APRS,TCPIP*,qAC,T2RUSSIA2` — APRS-IS принял и заигейтил нормально.
 
 Хочется, чтобы станция на wakkanai была видна как погодная станция на
 aprs.fi / aprs-map.info — по образцу
@@ -90,8 +96,8 @@ sudo make aprs-install APRS_CALLSIGN=R2BLN-13 APRS_LAT=55.1234 APRS_LON=37.5678 
 `aprs-uninstall`/`aprs-check`). Протестировано локально на реальных
 данных с `wakkanai.ts.0x1b.cc:9100/metrics` (парсинг + сборка пакета) —
 `R2BLN-13>APRS,TCPIP*:!5555.97N/03601.11E_.../...g...t065h65b09846...`.
-Ещё не разворачивалось на самой машине (`make aprs-install`/`activate`
-на wakkanai) и не подтверждено появление станции на aprs.fi/aprs-map.info.
+
+Развёрнуто на wakkanai и подтверждено на aprs-map.info (см. статус выше).
 
 ## Открытые вопросы
 
