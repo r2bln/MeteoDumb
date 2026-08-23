@@ -23,7 +23,7 @@
 `aprs-beacon.py`, comment-поле теперь собирается как:
 
 ```
-[{APRS_COMMENT}] sensor-in-sun(temp+) HOST:{hostname} CPU:{cpu}%used MEM:{mem}%used UP:{uptime} LD:{1m}/{5m}/{15m} [SYS:{cpu_temp}C] [MB:{mb_temp}C]
+[{APRS_COMMENT}] sensor-in-sun(temp+) HOST:{hostname} cpu-used:{cpu}% mem-used:{mem}% UP:{uptime} LD:{1m}/{5m}/{15m} [SYS:{cpu_temp}C] [MB:{mb_temp}C]
 ```
 
 В самом `aprs-beacon.py` дефолт `APRS_COMMENT` теперь пустой (был
@@ -33,20 +33,22 @@
 `/etc/default/aprs-beacon` при `make aprs-install`, если не переопределён
 явно параметром — про это забыли в первой версии тикета, из-за чего после
 деплоя в comment всё ещё был `MeteoDumb/wakkanai`. Сейчас там короткая
-ссылка на репозиторий: `github.com/r2bln/MeteoDumb`. `%used` явно написано
-словом (не просто `%`), чтобы не путать с "% свободно" при беглом чтении.
+ссылка на репозиторий: `github.com/r2bln/MeteoDumb`. Лейблы `cpu-used`/
+`mem-used` — единым токеном через дефис, без пробела внутри (не `CPU
+used:`) — чтобы парсилось `split()`-ом по пробелу без риска склеить
+лейбл со значением предыдущего поля.
 
 Пример реального пакета:
 
 ```
-R2BLN-13>APRS,TCPIP*:!5555.97N/03601.11E_.../...g...t076h55b09852github.com/r2bln/MeteoDumb sensor-in-sun(temp+) HOST:wakkanai CPU:22%used MEM:37%used UP:2d14h LD:2.17/1.78/1.63 SYS:47C MB:47C
+R2BLN-13>APRS,TCPIP*:!5555.97N/03601.11E_.../...g...t076h55b09852github.com/r2bln/MeteoDumb sensor-in-sun(temp+) HOST:wakkanai cpu-used:22% mem-used:37% UP:2d14h LD:2.17/1.78/1.63 SYS:47C MB:47C
 ```
 
-162 байта суммарно. Значение для сравнения с лимитом — не весь пакет, а
+164 байта суммарно. Значение для сравнения с лимитом — не весь пакет, а
 AX.25 info field (всё после первого `:`, спека ограничивает его 256
 байтами — сепараторы `:` внутри comment на этот подсчёт не влияют, там
-берётся именно первое двоеточие, после `APRS,TCPIP*`): сейчас это 141
-байт, то есть **115 байт в запасе**.
+берётся именно первое двоеточие, после `APRS,TCPIP*`): сейчас это 143
+байта, то есть **113 байт в запасе**.
 
 Источники телеметрии — только `/proc` и `/sys`, без внешних процессов и
 pip-зависимостей (тот же принцип, что и в остальном `aprs-beacon.py`):
@@ -54,8 +56,8 @@ pip-зависимостей (тот же принцип, что и в оста�
 - `HOST` — `socket.gethostname()`, чтобы в comment было видно, с какой
   машины пакет, без хардкода `wakkanai` в коде (переносимо на любую другую
   станцию без правки скрипта)
-- `CPU` — дельта `/proc/stat` за 0.3с, % занятости (не свободного)
-- `MEM` — `MemTotal`/`MemAvailable` из `/proc/meminfo`, % занятости
+- `cpu-used` — дельта `/proc/stat` за 0.3с, % занятости (не свободного)
+- `mem-used` — `MemTotal`/`MemAvailable` из `/proc/meminfo`, % занятости
 - `UP` — `/proc/uptime`, формат `XdYh` или `XhYm`
 - `LD` — `/proc/loadavg`, три числа как в `uptime` (1/5/15 мин)
 - `SYS` — температура CPU через `/sys/class/hwmon/hwmon*/name` (ищет

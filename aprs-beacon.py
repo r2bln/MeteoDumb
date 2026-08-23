@@ -199,7 +199,7 @@ def build_sys_status():
     cpu_temp_part = f" SYS:{cpu_temp:.0f}C" if cpu_temp is not None else ""
     mb_temp_part = f" MB:{mb_temp:.0f}C" if mb_temp is not None else ""
     return (
-        f"HOST:{socket.gethostname()} CPU:{cpu:.0f}%used MEM:{mem:.0f}%used "
+        f"HOST:{socket.gethostname()} cpu-used:{cpu:.0f}% mem-used:{mem:.0f}% "
         f"UP:{uptime} LD:{load1}/{load5}/{load15}{cpu_temp_part}{mb_temp_part}"
     )
 
