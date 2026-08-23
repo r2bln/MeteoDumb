@@ -196,11 +196,11 @@ def build_sys_status():
         return ""
     cpu_temp = read_cpu_temp_c()
     mb_temp = read_mainboard_temp_c()
-    cpu_temp_part = f" SYS{cpu_temp:.0f}C" if cpu_temp is not None else ""
-    mb_temp_part = f" MB{mb_temp:.0f}C" if mb_temp is not None else ""
+    cpu_temp_part = f" SYS:{cpu_temp:.0f}C" if cpu_temp is not None else ""
+    mb_temp_part = f" MB:{mb_temp:.0f}C" if mb_temp is not None else ""
     return (
-        f"CPU{cpu:.0f}%used MEM{mem:.0f}%used UP{uptime} LD{load1}/{load5}/{load15}"
-        f"{cpu_temp_part}{mb_temp_part}"
+        f"HOST:{socket.gethostname()} CPU:{cpu:.0f}%used MEM:{mem:.0f}%used "
+        f"UP:{uptime} LD:{load1}/{load5}/{load15}{cpu_temp_part}{mb_temp_part}"
     )
 
 

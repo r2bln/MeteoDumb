@@ -30,7 +30,7 @@ APRS_LON      ?=
 APRS_PASSCODE ?=
 APRS_SERVER   ?= rotate.aprs2.ru:14580
 APRS_INTERVAL ?= 600
-APRS_COMMENT  ?= MeteoDumb/wakkanai
+APRS_COMMENT  ?= github.com/r2bln/MeteoDumb
 
 .PHONY: install uninstall check-node-exporter check-tty check \
         aprs-install aprs-activate aprs-deactivate aprs-uninstall aprs-check check-aprs-config
