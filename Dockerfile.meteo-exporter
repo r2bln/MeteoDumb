@@ -1,0 +1,15 @@
+# meteo-exporter: BME280 serial -> prometheus-node-exporter textfile-коллектор.
+# Обвязка для docker — сам скрипт (meteo-exporter.sh) не изменён и остаётся годным для
+# прямой systemd-установки (make install), см. README/Makefile.
+FROM debian:trixie-slim
+
+# bash: скрипт использует [[ ]] и BASH_REMATCH; coreutils (stty/date/mv/awk) — уже в базовом
+# образе, кроме awk, который здесь используется, но не является строго необходимым (пересчёт
+# hPa->Pa на awk, оставлен для совпадения с systemd-путём) -> gawk явно.
+RUN apt-get update && apt-get install -y --no-install-recommends bash gawk \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY meteo-exporter.sh /usr/local/bin/meteo-exporter
+RUN chmod +x /usr/local/bin/meteo-exporter
+
+ENTRYPOINT ["/usr/local/bin/meteo-exporter"]

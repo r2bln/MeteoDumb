@@ -1,0 +1,12 @@
+# aprs-beacon: один запуск = один маячок в APRS-IS (см. докстринг aprs-beacon.py). Под
+# systemd периодичность даёт aprs-beacon.timer; здесь то же самое даёт entrypoint-цикл ниже,
+# без отдельного планировщика в контейнере. Сам скрипт не изменён.
+FROM python:3.13-slim
+
+COPY aprs-beacon.py /usr/local/bin/aprs-beacon
+RUN chmod +x /usr/local/bin/aprs-beacon
+
+# APRS_INTERVAL — секунды между маячками, тот же смысл, что systemd/aprs-beacon.timer's
+# OnUnitActiveSec (Makefile default 600). Ошибка одного маячка (ненулевой exit) цикл не
+# останавливает — тот же принцип, что у systemd Restart=always для таймер-джобы.
+ENTRYPOINT ["/bin/sh", "-c", "while true; do /usr/local/bin/aprs-beacon || true; sleep \"${APRS_INTERVAL:-600}\"; done"]
