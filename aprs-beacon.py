@@ -25,6 +25,10 @@ PROM_FILE = os.environ.get(
     ),
 )
 STATE_FILE = os.environ.get("APRS_STATE_FILE", "/var/lib/aprs-beacon/last-sent")
+TELEMETRY_SEQ_FILE = os.environ.get(
+    "APRS_TELEMETRY_SEQ_FILE",
+    os.path.join(os.path.dirname(STATE_FILE), "telemetry-seq"),
+)
 SERVER = os.environ.get("APRS_SERVER", "rotate.aprs2.ru:14580")
 CALLSIGN = os.environ.get("APRS_CALLSIGN")
 LAT = os.environ.get("APRS_LAT")
@@ -33,6 +37,22 @@ PASSCODE = os.environ.get("APRS_PASSCODE")
 COMMENT = os.environ.get("APRS_COMMENT", "")
 SENSOR_NOTE = "sensor-in-sun(temp+)"
 CONNECT_TIMEOUT = 10
+
+# APRS telemetry (METEO-4): 5 analog channels, raw value 0..255 each, real
+# value = a*x^2 + b*x + c with (a, b, c) from EQNS. Tuples are
+# (PARM name, UNIT, b); a and c are always 0. Load average has b=0.02 so it
+# fits 0..5.10 into one byte - clamped above that.
+TELEMETRY_CHANNELS = (
+    ("CPU", "%", 1),
+    ("RAM", "%", 1),
+    ("Load", "load", 0.02),
+    ("SysT", "C", 1),
+    ("MBT", "C", 1),
+)
+TELEMETRY_TITLE = "MeteoDumb host"
+# PARM/UNIT/EQNS/BITS are resent every Nth telemetry packet (and on seq 0,
+# i.e. after a fresh start) - at the default 600s interval that's hourly.
+TELEMETRY_META_EVERY = 6
 
 
 def log(msg):
@@ -184,24 +204,89 @@ def read_mainboard_temp_c():
     return _read_hwmon_temp_c("acpitz")
 
 
-def build_sys_status():
-    """CPU/mem/uptime/temp telemetry for the beacon's own host, appended to
-    the comment field so it's visible alongside the weather report."""
+def read_host_stats():
+    """CPU/mem/uptime/load/temp of the beacon's own host, sampled once and
+    used for both the comment field and the telemetry packet. None if
+    /proc is unreadable; temps are None when no matching hwmon exists."""
     try:
-        cpu = read_cpu_pct()
-        mem = read_mem_pct()
-        uptime = read_uptime_str()
         load1, load5, load15 = read_loadavg()
+        return {
+            "cpu": read_cpu_pct(),
+            "mem": read_mem_pct(),
+            "uptime": read_uptime_str(),
+            "load": (load1, load5, load15),
+            "cpu_temp": read_cpu_temp_c(),
+            "mb_temp": read_mainboard_temp_c(),
+        }
     except OSError:
+        return None
+
+
+def build_sys_status(stats):
+    """Host telemetry appended to the comment field so it's visible
+    alongside the weather report."""
+    if stats is None:
         return ""
-    cpu_temp = read_cpu_temp_c()
-    mb_temp = read_mainboard_temp_c()
+    load1, load5, load15 = stats["load"]
+    cpu_temp, mb_temp = stats["cpu_temp"], stats["mb_temp"]
     cpu_temp_part = f" SYS:{cpu_temp:.0f}C" if cpu_temp is not None else ""
     mb_temp_part = f" MB:{mb_temp:.0f}C" if mb_temp is not None else ""
     return (
-        f"HOST:{socket.gethostname()} cpu-used:{cpu:.0f}% mem-used:{mem:.0f}% "
-        f"UP:{uptime} LD:{load1}/{load5}/{load15}{cpu_temp_part}{mb_temp_part}"
+        f"HOST:{socket.gethostname()} cpu-used:{stats['cpu']:.0f}% "
+        f"mem-used:{stats['mem']:.0f}% UP:{stats['uptime']} "
+        f"LD:{load1}/{load5}/{load15}{cpu_temp_part}{mb_temp_part}"
     )
+
+
+def next_telemetry_seq(path):
+    """Sequence number 000..999, persisted next to the last-sent state file.
+    Starts over from 0 if the file is missing/unreadable."""
+    try:
+        with open(path) as f:
+            seq = (int(f.read().strip()) + 1) % 1000
+    except (OSError, ValueError):
+        seq = 0
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(f"{seq}\n")
+    return seq
+
+
+def telemetry_raw(value, scale):
+    """Real value -> raw 0..255 byte for a channel with EQNS b=scale.
+    Missing values (no hwmon) go out as 0."""
+    if value is None:
+        return 0
+    return max(0, min(255, round(value / scale)))
+
+
+def build_telemetry_packets(callsign, stats, seq, with_meta):
+    values = (
+        stats["cpu"],
+        stats["mem"],
+        float(stats["load"][0]),
+        stats["cpu_temp"],
+        stats["mb_temp"],
+    )
+    analog = ",".join(
+        f"{telemetry_raw(v, ch[2]):03d}" for v, ch in zip(values, TELEMETRY_CHANNELS)
+    )
+    packets = [f"{callsign}>APRS,TCPIP*:T#{seq:03d},{analog},00000000"]
+    if with_meta:
+        # Telemetry metadata goes out as APRS messages addressed to the
+        # station itself; addressee is padded to exactly 9 characters.
+        to = f"{callsign:<9}"
+        names = ",".join(ch[0] for ch in TELEMETRY_CHANNELS)
+        units = ",".join(ch[1] for ch in TELEMETRY_CHANNELS)
+        eqns = ",".join(f"0,{ch[2]},0" for ch in TELEMETRY_CHANNELS)
+        for body in (
+            f"PARM.{names}",
+            f"UNIT.{units}",
+            f"EQNS.{eqns}",
+            f"BITS.00000000,{TELEMETRY_TITLE}",
+        ):
+            packets.append(f"{callsign}>APRS,TCPIP*::{to}:{body}")
+    return packets
 
 
 def build_packet(callsign, lat, lon, reading, comment):
@@ -213,14 +298,15 @@ def build_packet(callsign, lat, lon, reading, comment):
     return f"{callsign}>APRS,TCPIP*:!{position}{wind}{temp}{humidity}{pressure}{comment}"
 
 
-def send(server, callsign, passcode, packet):
+def send(server, callsign, passcode, packets):
     host, port = server.split(":")
     with socket.create_connection((host, int(port)), timeout=CONNECT_TIMEOUT) as sock:
         f = sock.makefile("rw", encoding="ascii", newline="\r\n")
         f.write(f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.0\r\n")
         f.flush()
         f.readline()  # server login banner/ack
-        f.write(packet + "\r\n")
+        for packet in packets:
+            f.write(packet + "\r\n")
         f.flush()
 
 
@@ -241,17 +327,28 @@ def main():
         return 1
 
     passcode = PASSCODE if PASSCODE is not None else aprs_passcode(CALLSIGN)
-    comment_parts = [COMMENT, SENSOR_NOTE, build_sys_status()]
+    stats = read_host_stats()
+    comment_parts = [COMMENT, SENSOR_NOTE, build_sys_status(stats)]
     comment = " ".join(p for p in comment_parts if p)
-    packet = build_packet(CALLSIGN, float(LAT), float(LON), reading, comment)
+    packets = [build_packet(CALLSIGN, float(LAT), float(LON), reading, comment)]
+
+    if stats is not None:
+        try:
+            seq = next_telemetry_seq(TELEMETRY_SEQ_FILE)
+        except OSError as e:
+            log(f"could not persist telemetry seq to {TELEMETRY_SEQ_FILE}: {e}")
+            seq = 0
+        with_meta = seq % TELEMETRY_META_EVERY == 0
+        packets += build_telemetry_packets(CALLSIGN, stats, seq, with_meta)
 
     try:
-        send(SERVER, CALLSIGN, passcode, packet)
+        send(SERVER, CALLSIGN, passcode, packets)
     except OSError as e:
         log(f"failed to send beacon to {SERVER}: {e}")
         return 1
 
-    log(f"sent: {packet}")
+    for packet in packets:
+        log(f"sent: {packet}")
 
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w") as f:

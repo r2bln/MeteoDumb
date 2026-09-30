@@ -100,6 +100,10 @@ Headless APRS-точка (см. METEO-2): раз в `APRS_INTERVAL` секунд
 интернет-клиент. Появляется на aprs.fi/aprs-map.info как погодная
 станция. Реализация на stdlib (`socket`), без внешних Python-зависимостей.
 
+Вместе с погодой уходит APRS-телеметрия хоста (METEO-4): CPU, RAM, load
+average и две температуры — графики во вкладке Telemetry на
+aprs.fi/aprs-map.info.
+
 Позывной, координаты и APRS-IS passcode — данные конкретного места и
 пользователя, в репозиторий не коммитятся; передаются параметрами `make`
 и оседают в `/etc/default/aprs-beacon` на самой машине.
