@@ -23,7 +23,7 @@
 `aprs-beacon.py`, comment-поле теперь собирается как:
 
 ```
-[{APRS_COMMENT}] sensor-in-sun(temp+) HOST:{hostname} cpu-used:{cpu}% mem-used:{mem}% UP:{uptime} LD:{1m}/{5m}/{15m} [SYS:{cpu_temp}C] [MB:{mb_temp}C]
+[{APRS_COMMENT}] sensor-in-sun(temp+) HOST:{hostname} cpu-used:{cpu}% mem-used:{mem}% UP:{uptime} LD:{1m}/{5m}/{15m} [CPU:{cpu_temp}C] [MB:{mb_temp}C]
 ```
 
 В самом `aprs-beacon.py` дефолт `APRS_COMMENT` теперь пустой (был
@@ -41,7 +41,7 @@ used:`) — чтобы парсилось `split()`-ом по пробелу б�
 Пример реального пакета:
 
 ```
-R2BLN-13>APRS,TCPIP*:!5555.97N/03601.11E_.../...g...t076h55b09852github.com/r2bln/MeteoDumb sensor-in-sun(temp+) HOST:wakkanai cpu-used:22% mem-used:37% UP:2d14h LD:2.17/1.78/1.63 SYS:47C MB:47C
+R2BLN-13>APRS,TCPIP*:!5555.97N/03601.11E_.../...g...t076h55b09852github.com/r2bln/MeteoDumb sensor-in-sun(temp+) HOST:wakkanai cpu-used:22% mem-used:37% UP:2d14h LD:2.17/1.78/1.63 CPU:47C MB:47C
 ```
 
 164 байта суммарно. Значение для сравнения с лимитом — не весь пакет, а
@@ -60,7 +60,7 @@ pip-зависимостей (тот же принцип, что и в оста�
 - `mem-used` — `MemTotal`/`MemAvailable` из `/proc/meminfo`, % занятости
 - `UP` — `/proc/uptime`, формат `XdYh` или `XhYm`
 - `LD` — `/proc/loadavg`, три числа как в `uptime` (1/5/15 мин)
-- `SYS` — температура CPU через `/sys/class/hwmon/hwmon*/name` (ищет
+- `CPU` — температура CPU через `/sys/class/hwmon/hwmon*/name` (ищет
   `k10temp` на AMD или `coretemp` на Intel — то же самое значение, что
   показывает `sensors`, но без шелл-аута к внешней утилите)
 - `MB` — температура через `acpitz` в hwmon — общая ACPI-термозона, не
@@ -68,7 +68,7 @@ pip-зависимостей (тот же принцип, что и в оста�
   мат.платы/корпуса, но что конкретно в неё зашито — решает прошивка
   платы, гарантий нет
 
-`SYS`/`MB` — оба опциональные, если соответствующий hwmon не найден,
+`CPU`/`MB` — оба опциональные, если соответствующий hwmon не найден,
 поле просто опускается, не роняя отправку маяка. Имена hwmon-драйверов
 матчатся по префиксу (`name == n or name.startswith(n + "_")`), потому
 что ядро добавляет `_0`/`_1` и т.п., когда в sysfs коллизия имён

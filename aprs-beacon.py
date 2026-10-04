@@ -229,7 +229,7 @@ def build_sys_status(stats):
         return ""
     load1, load5, load15 = stats["load"]
     cpu_temp, mb_temp = stats["cpu_temp"], stats["mb_temp"]
-    cpu_temp_part = f" SYS:{cpu_temp:.0f}C" if cpu_temp is not None else ""
+    cpu_temp_part = f" CPU:{cpu_temp:.0f}C" if cpu_temp is not None else ""
     mb_temp_part = f" MB:{mb_temp:.0f}C" if mb_temp is not None else ""
     return (
         f"HOST:{socket.gethostname()} cpu-used:{stats['cpu']:.0f}% "
