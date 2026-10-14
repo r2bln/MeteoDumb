@@ -323,23 +323,25 @@ def send(server, callsign, passcode, packets):
 
 
 def send_http(server, callsign, passcode, packets):
-    """APRS-IS HTTP submit: login line + packets in one POST body. The server
-    answers 200 only for a verified login; anything else raises."""
-    body = f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.0\r\n"
-    body += "".join(p + "\r\n" for p in packets)
-    req = urllib.request.Request(
-        f"http://{server}/",
-        data=body.encode("ascii"),
-        headers={"Content-Type": "application/octet-stream", "Accept-Type": "text/plain"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=CONNECT_TIMEOUT) as resp:
-            resp.read()
-    except urllib.error.URLError as e:
-        # HTTPError (non-2xx) is a URLError too; both are OSError subclasses,
-        # but re-raise as plain OSError so main() logs the server's reason.
-        raise OSError(f"HTTP submit failed: {e}") from e
+    """APRS-IS HTTP submit: login line + one packet per POST - aprsc takes only
+    the first line after the login and silently drops the rest, so packets go
+    out as separate requests. The server answers 200 only for a verified login;
+    anything else raises."""
+    login = f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.0\r\n"
+    for packet in packets:
+        req = urllib.request.Request(
+            f"http://{server}/",
+            data=(login + packet + "\r\n").encode("ascii"),
+            headers={"Content-Type": "application/octet-stream", "Accept-Type": "text/plain"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=CONNECT_TIMEOUT) as resp:
+                resp.read()
+        except urllib.error.URLError as e:
+            # HTTPError (non-2xx) is a URLError too; re-raise as plain OSError
+            # so main() logs the server's reason.
+            raise OSError(f"HTTP submit failed: {e}") from e
 
 
 def main():
