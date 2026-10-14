@@ -50,13 +50,16 @@ CONNECT_TIMEOUT = 10
 # APRS telemetry (METEO-4): 5 analog channels, raw value 0..255 each, real
 # value = a*x^2 + b*x + c with (a, b, c) from EQNS. Tuples are
 # (PARM name, UNIT, b); a and c are always 0. Load average has b=0.02 so it
-# fits 0..5.10 into one byte - clamped above that.
+# fits 0..5.10 into one byte - clamped above that. Names follow the comment
+# labels (cpu-used/mem-used are cut to fit the 7/7/6/6/5-char PARM limits).
+# Only 5 analog channels exist, so MB (acpitz) stays comment-only and UP takes
+# its slot - whole days, same as the "20d" in the comment, 255 max.
 TELEMETRY_CHANNELS = (
-    ("CPU", "%", 1),
-    ("RAM", "%", 1),
-    ("Load", "load", 0.02),
-    ("SysT", "C", 1),
-    ("MBT", "C", 1),
+    ("cpu", "%", 1),
+    ("mem", "%", 1),
+    ("LD", "", 0.02),
+    ("CPU", "C", 1),
+    ("UP", "d", 1),
 )
 TELEMETRY_TITLE = os.environ.get("APRS_TELEMETRY_TITLE", "MeteoDumb host")
 # PARM/UNIT/EQNS/BITS are resent every Nth telemetry packet (and on seq 0,
@@ -170,10 +173,13 @@ def read_loadavg():
     return one, five, fifteen
 
 
-def read_uptime_str():
+def read_uptime_s():
     with open("/proc/uptime") as f:
-        seconds = float(f.read().split()[0])
-    days, rem = divmod(int(seconds), 86400)
+        return int(float(f.read().split()[0]))
+
+
+def format_uptime(seconds):
+    days, rem = divmod(seconds, 86400)
     hours, rem = divmod(rem, 3600)
     minutes = rem // 60
     if days:
@@ -219,10 +225,12 @@ def read_host_stats():
     /proc is unreadable; temps are None when no matching hwmon exists."""
     try:
         load1, load5, load15 = read_loadavg()
+        uptime_s = read_uptime_s()
         return {
             "cpu": read_cpu_pct(),
             "mem": read_mem_pct(),
-            "uptime": read_uptime_str(),
+            "uptime": format_uptime(uptime_s),
+            "uptime_days": uptime_s // 86400,
             "load": (load1, load5, load15),
             "cpu_temp": read_cpu_temp_c(),
             "mb_temp": read_mainboard_temp_c(),
@@ -275,15 +283,18 @@ def build_telemetry_packets(callsign, stats, seq, with_meta):
         stats["mem"],
         float(stats["load"][0]),
         stats["cpu_temp"],
-        stats["mb_temp"],
+        stats["uptime_days"],
     )
     analog = ",".join(
         f"{telemetry_raw(v, ch[2]):03d}" for v, ch in zip(values, TELEMETRY_CHANNELS)
     )
-    packets = [f"{callsign}>APRS,TCPIP*:T#{seq:03d},{analog},00000000"]
+    packets = []
     if with_meta:
         # Telemetry metadata goes out as APRS messages addressed to the
         # station itself; addressee is padded to exactly 9 characters.
+        # Sent before T# - trackdirect (radiorubka) labels a T# row with the
+        # metadata known when it arrived, so after a fresh start metadata
+        # sent after T#000 left that row as Value1..5.
         to = f"{callsign:<9}"
         names = ",".join(ch[0] for ch in TELEMETRY_CHANNELS)
         units = ",".join(ch[1] for ch in TELEMETRY_CHANNELS)
@@ -295,6 +306,7 @@ def build_telemetry_packets(callsign, stats, seq, with_meta):
             f"BITS.00000000,{TELEMETRY_TITLE}",
         ):
             packets.append(f"{callsign}>APRS,TCPIP*::{to}:{body}")
+    packets.append(f"{callsign}>APRS,TCPIP*:T#{seq:03d},{analog},00000000")
     return packets
 
 
