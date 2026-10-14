@@ -16,6 +16,8 @@ import re
 import socket
 import sys
 import time
+import urllib.error
+import urllib.request
 
 PROM_FILE = os.environ.get(
     "APRS_PROM_FILE",
@@ -35,6 +37,13 @@ LAT = os.environ.get("APRS_LAT")
 LON = os.environ.get("APRS_LON")
 PASSCODE = os.environ.get("APRS_PASSCODE")
 COMMENT = os.environ.get("APRS_COMMENT", "")
+# APRS_WEATHER=0: no weather/position packet, telemetry only - for a host whose
+# callsign already beacons its position from elsewhere (METEO-5).
+WEATHER = os.environ.get("APRS_WEATHER", "1") != "0"
+# APRS_TRANSPORT=http: one-shot HTTP POST submit (APRS_SERVER port 8080) instead
+# of a TCP login - doesn't hold an APRS-IS session, so it doesn't clash with
+# another client logged in under the same callsign (METEO-5).
+TRANSPORT = os.environ.get("APRS_TRANSPORT", "tcp")
 SENSOR_NOTE = "sensor-in-sun(temp+)"
 CONNECT_TIMEOUT = 10
 
@@ -49,7 +58,7 @@ TELEMETRY_CHANNELS = (
     ("SysT", "C", 1),
     ("MBT", "C", 1),
 )
-TELEMETRY_TITLE = "MeteoDumb host"
+TELEMETRY_TITLE = os.environ.get("APRS_TELEMETRY_TITLE", "MeteoDumb host")
 # PARM/UNIT/EQNS/BITS are resent every Nth telemetry packet (and on seq 0,
 # i.e. after a fresh start) - at the default 600s interval that's hourly.
 TELEMETRY_META_EVERY = 6
@@ -299,6 +308,9 @@ def build_packet(callsign, lat, lon, reading, comment):
 
 
 def send(server, callsign, passcode, packets):
+    if TRANSPORT == "http":
+        send_http(server, callsign, passcode, packets)
+        return
     host, port = server.split(":")
     with socket.create_connection((host, int(port)), timeout=CONNECT_TIMEOUT) as sock:
         f = sock.makefile("rw", encoding="ascii", newline="\r\n")
@@ -310,27 +322,59 @@ def send(server, callsign, passcode, packets):
         f.flush()
 
 
-def main():
-    if not CALLSIGN or not LAT or not LON:
-        log("APRS_CALLSIGN, APRS_LAT and APRS_LON are required")
-        return 1
-
+def send_http(server, callsign, passcode, packets):
+    """APRS-IS HTTP submit: login line + packets in one POST body. The server
+    answers 200 only for a verified login; anything else raises."""
+    body = f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.0\r\n"
+    body += "".join(p + "\r\n" for p in packets)
+    req = urllib.request.Request(
+        f"http://{server}/",
+        data=body.encode("ascii"),
+        headers={"Content-Type": "application/octet-stream", "Accept-Type": "text/plain"},
+        method="POST",
+    )
     try:
-        reading = read_reading(PROM_FILE)
-    except (OSError, ValueError) as e:
-        log(f"could not read sensor data from {PROM_FILE}: {e}")
-        return 1
+        with urllib.request.urlopen(req, timeout=CONNECT_TIMEOUT) as resp:
+            resp.read()
+    except urllib.error.URLError as e:
+        # HTTPError (non-2xx) is a URLError too; both are OSError subclasses,
+        # but re-raise as plain OSError so main() logs the server's reason.
+        raise OSError(f"HTTP submit failed: {e}") from e
 
-    age = time.time() - reading["meteo_last_reading_timestamp_seconds"]
-    if age > 300:
-        log(f"latest sensor reading is {age:.0f}s old, refusing to beacon stale data")
+
+def main():
+    if not CALLSIGN:
+        log("APRS_CALLSIGN is required")
+        return 1
+    if WEATHER and (not LAT or not LON):
+        log("APRS_LAT and APRS_LON are required unless APRS_WEATHER=0")
+        return 1
+    if TRANSPORT not in ("tcp", "http"):
+        log(f"APRS_TRANSPORT must be tcp or http, got {TRANSPORT!r}")
         return 1
 
     passcode = PASSCODE if PASSCODE is not None else aprs_passcode(CALLSIGN)
     stats = read_host_stats()
-    comment_parts = [COMMENT, SENSOR_NOTE, build_sys_status(stats)]
-    comment = " ".join(p for p in comment_parts if p)
-    packets = [build_packet(CALLSIGN, float(LAT), float(LON), reading, comment)]
+    packets = []
+
+    if WEATHER:
+        try:
+            reading = read_reading(PROM_FILE)
+        except (OSError, ValueError) as e:
+            log(f"could not read sensor data from {PROM_FILE}: {e}")
+            return 1
+
+        age = time.time() - reading["meteo_last_reading_timestamp_seconds"]
+        if age > 300:
+            log(f"latest sensor reading is {age:.0f}s old, refusing to beacon stale data")
+            return 1
+
+        comment_parts = [COMMENT, SENSOR_NOTE, build_sys_status(stats)]
+        comment = " ".join(p for p in comment_parts if p)
+        packets.append(build_packet(CALLSIGN, float(LAT), float(LON), reading, comment))
+    elif stats is None:
+        log("telemetry-only mode, but host stats are unreadable - nothing to send")
+        return 1
 
     if stats is not None:
         try:
