@@ -46,6 +46,18 @@ WEATHER = os.environ.get("APRS_WEATHER", "1") != "0"
 TRANSPORT = os.environ.get("APRS_TRANSPORT", "tcp")
 SENSOR_NOTE = "sensor-in-sun(temp+)"
 CONNECT_TIMEOUT = 10
+# Weather fields go out only when the reading is fresh AND plausible. A dying
+# BME280 keeps ACKing on I2C while its registers read back all-ones, which the
+# compensation math turns into ~+180C / 100% / negative pressure - fresh
+# garbage that the age check alone happily passed (2026-11-13). Bounds are
+# wider than any real weather (BME280 itself is -40..+85C, 300..1100hPa, and
+# this sensor bakes in the sun), but narrow enough to catch bus garbage.
+STALE_AFTER_S = 300
+SENSOR_LIMITS = (
+    ("meteo_temperature_celsius", -55.0, 70.0),
+    ("meteo_humidity_percent", 0.0, 100.0),
+    ("meteo_pressure_pascals", 30000.0, 120000.0),
+)
 
 # APRS telemetry (METEO-4): 5 analog channels, raw value 0..255 each, real
 # value = a*x^2 + b*x + c with (a, b, c) from EQNS. Tuples are
@@ -103,6 +115,16 @@ def read_reading(path):
     if missing:
         raise ValueError(f"{path} is missing metric(s): {', '.join(missing)}")
     return values
+
+
+def implausible(reading):
+    """Human-readable complaints for metrics outside SENSOR_LIMITS
+    (empty list = reading is plausible)."""
+    return [
+        f"{name}={reading[name]:g} not in {lo:g}..{hi:g}"
+        for name, lo, hi in SENSOR_LIMITS
+        if not lo <= reading[name] <= hi
+    ]
 
 
 def format_lat(lat):
@@ -326,7 +348,7 @@ def send(server, callsign, passcode, packets):
     host, port = server.split(":")
     with socket.create_connection((host, int(port)), timeout=CONNECT_TIMEOUT) as sock:
         f = sock.makefile("rw", encoding="ascii", newline="\r\n")
-        f.write(f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.0\r\n")
+        f.write(f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.1\r\n")
         f.flush()
         f.readline()  # server login banner/ack
         for packet in packets:
@@ -339,7 +361,7 @@ def send_http(server, callsign, passcode, packets):
     the first line after the login and silently drops the rest, so packets go
     out as separate requests. The server answers 200 only for a verified login;
     anything else raises."""
-    login = f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.0\r\n"
+    login = f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.1\r\n"
     for packet in packets:
         req = urllib.request.Request(
             f"http://{server}/",
@@ -372,23 +394,28 @@ def main():
     packets = []
 
     if WEATHER:
+        # Unreadable/stale/implausible weather downgrades the run to a
+        # telemetry-only beacon (the METEO-5 packet set) instead of killing
+        # the host telemetry too - the sensor being dead must not silence
+        # T#, and bad values must not reach APRS-IS looking like weather.
         try:
             reading = read_reading(PROM_FILE)
         except (OSError, ValueError) as e:
-            log(f"could not read sensor data from {PROM_FILE}: {e}")
-            return 1
-
-        age = time.time() - reading["meteo_last_reading_timestamp_seconds"]
-        if age > 300:
-            log(f"latest sensor reading is {age:.0f}s old, refusing to beacon stale data")
-            return 1
-
-        comment_parts = [COMMENT, SENSOR_NOTE, build_sys_status(stats)]
-        comment = " ".join(p for p in comment_parts if p)
-        packets.append(build_packet(CALLSIGN, float(LAT), float(LON), reading, comment))
-    elif stats is None:
-        log("telemetry-only mode, but host stats are unreadable - nothing to send")
-        return 1
+            log(f"could not read sensor data from {PROM_FILE}: {e} - telemetry only")
+        else:
+            age = time.time() - reading["meteo_last_reading_timestamp_seconds"]
+            if age > STALE_AFTER_S:
+                log(f"latest sensor reading is {age:.0f}s old - telemetry only")
+            else:
+                bad = implausible(reading)
+                if bad:
+                    log(f"implausible sensor reading ({'; '.join(bad)}) - telemetry only")
+                else:
+                    comment_parts = [COMMENT, SENSOR_NOTE, build_sys_status(stats)]
+                    comment = " ".join(p for p in comment_parts if p)
+                    packets.append(
+                        build_packet(CALLSIGN, float(LAT), float(LON), reading, comment)
+                    )
 
     if stats is not None:
         try:
@@ -398,6 +425,10 @@ def main():
             seq = 0
         with_meta = seq % TELEMETRY_META_EVERY == 0
         packets += build_telemetry_packets(CALLSIGN, stats, seq, with_meta)
+
+    if not packets:
+        log("nothing to send: no beaconable weather and host stats are unreadable")
+        return 1
 
     try:
         send(SERVER, CALLSIGN, passcode, packets)
