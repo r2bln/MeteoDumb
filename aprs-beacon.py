@@ -44,7 +44,13 @@ WEATHER = os.environ.get("APRS_WEATHER", "1") != "0"
 # of a TCP login - doesn't hold an APRS-IS session, so it doesn't clash with
 # another client logged in under the same callsign (METEO-5).
 TRANSPORT = os.environ.get("APRS_TRANSPORT", "tcp")
-SENSOR_NOTE = "sensor-in-sun(temp+)"
+# APRS_TELEMETRY=0: weather only, no T# - for a host whose telemetry is already
+# beaconed under another callsign (R2BLN-10 on wakkanai, METEO-6).
+TELEMETRY = os.environ.get("APRS_TELEMETRY", "1") != "0"
+# Sensor provenance note appended to the weather comment. Default keeps the
+# BME280 wording; the ISM pipeline (METEO-6) overrides it with the rtl_433
+# model/id via APRS_SENSOR_NOTE.
+SENSOR_NOTE = os.environ.get("APRS_SENSOR_NOTE", "sensor-in-sun(temp+)")
 CONNECT_TIMEOUT = 10
 # Weather fields go out only when the reading is fresh AND plausible. A dying
 # BME280 keeps ACKing on I2C while its registers read back all-ones, which the
@@ -102,12 +108,14 @@ def read_reading(path):
             if m:
                 values[m.group(1)] = float(m.group(2))
 
+    # Humidity and pressure are optional since METEO-6 (ISM sensors via rtl_433):
+    # roughly half of them report no humidity and almost none report pressure.
+    # Missing fields are simply dropped from the APRS packet (see build_packet),
+    # so only temperature + freshness are mandatory here.
     missing = [
         k
         for k in (
             "meteo_temperature_celsius",
-            "meteo_humidity_percent",
-            "meteo_pressure_pascals",
             "meteo_last_reading_timestamp_seconds",
         )
         if k not in values
@@ -119,11 +127,12 @@ def read_reading(path):
 
 def implausible(reading):
     """Human-readable complaints for metrics outside SENSOR_LIMITS
-    (empty list = reading is plausible)."""
+    (empty list = reading is plausible). Only fields present in the reading
+    are checked - absent fields can't be implausible."""
     return [
         f"{name}={reading[name]:g} not in {lo:g}..{hi:g}"
         for name, lo, hi in SENSOR_LIMITS
-        if not lo <= reading[name] <= hi
+        if name in reading and not lo <= reading[name] <= hi
     ]
 
 
@@ -336,8 +345,18 @@ def build_packet(callsign, lat, lon, reading, comment):
     position = f"{format_lat(lat)}/{format_lon(lon)}_"
     wind = ".../...g..."
     temp = f"t{format_temp_f(reading['meteo_temperature_celsius'])}"
-    humidity = f"h{format_humidity(reading['meteo_humidity_percent'])}"
-    pressure = f"b{format_pressure(reading['meteo_pressure_pascals'])}"
+    # h/b only when the source actually reports them (METEO-6): the APRS
+    # position+weather format allows dropping fields after t.
+    humidity = (
+        f"h{format_humidity(reading['meteo_humidity_percent'])}"
+        if "meteo_humidity_percent" in reading
+        else ""
+    )
+    pressure = (
+        f"b{format_pressure(reading['meteo_pressure_pascals'])}"
+        if "meteo_pressure_pascals" in reading
+        else ""
+    )
     return f"{callsign}>APRS,TCPIP*:!{position}{wind}{temp}{humidity}{pressure}{comment}"
 
 
@@ -348,7 +367,7 @@ def send(server, callsign, passcode, packets):
     host, port = server.split(":")
     with socket.create_connection((host, int(port)), timeout=CONNECT_TIMEOUT) as sock:
         f = sock.makefile("rw", encoding="ascii", newline="\r\n")
-        f.write(f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.1\r\n")
+        f.write(f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.2\r\n")
         f.flush()
         f.readline()  # server login banner/ack
         for packet in packets:
@@ -361,7 +380,7 @@ def send_http(server, callsign, passcode, packets):
     the first line after the login and silently drops the rest, so packets go
     out as separate requests. The server answers 200 only for a verified login;
     anything else raises."""
-    login = f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.1\r\n"
+    login = f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.2\r\n"
     for packet in packets:
         req = urllib.request.Request(
             f"http://{server}/",
@@ -417,7 +436,7 @@ def main():
                         build_packet(CALLSIGN, float(LAT), float(LON), reading, comment)
                     )
 
-    if stats is not None:
+    if TELEMETRY and stats is not None:
         try:
             seq = next_telemetry_seq(TELEMETRY_SEQ_FILE)
         except OSError as e:

@@ -1,0 +1,12 @@
+# ism-exporter: вечный цикл внутри скрипта (см. докстринг ism-exporter.py) - свежесть
+# meteo.prom должна переживать паузы между передачами датчиков, так что никакого
+# "один запуск = одна итерация" как у aprs-beacon здесь нет.
+FROM python:3.13-slim
+
+COPY ism-exporter.py /usr/local/bin/ism-exporter
+RUN chmod +x /usr/local/bin/ism-exporter
+
+# ISM_DECODE_DIR - каталог сервисных логов OpenWebRX+ (ISM-*.txt), монтируется
+# read-only; METEO_TEXTFILE_DIR - textfile-коллектор node-exporter, сюда пишется
+# meteo.prom для aprs-beacon.
+ENTRYPOINT ["/usr/local/bin/ism-exporter"]

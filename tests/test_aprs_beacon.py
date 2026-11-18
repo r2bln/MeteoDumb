@@ -69,7 +69,7 @@ class BeaconTestCase(unittest.TestCase):
         self.state = os.path.join(self.tmp.name, "state")
         self.prom = os.path.join(self.tmp.name, "meteo.prom")
 
-    def run_beacon(self):
+    def run_beacon(self, extra_env=None):
         server = FakeAprsIs()
         server.start()
         env = dict(
@@ -82,6 +82,7 @@ class BeaconTestCase(unittest.TestCase):
             APRS_STATE_FILE=os.path.join(self.state, "last-sent"),
             APRS_TELEMETRY_SEQ_FILE=os.path.join(self.state, "telemetry-seq"),
         )
+        env.update(extra_env or {})
         proc = subprocess.run(
             [sys.executable, str(SCRIPT)],
             env=env,
@@ -134,6 +135,41 @@ class BeaconTestCase(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual([], self.is_weather(lines), lines)
         self.assertTrue(self.is_telemetry(lines), lines)
+
+    def test_temperature_only_sends_weather_without_hb(self):
+        # METEO-6: ISM sensors rarely report humidity and almost never
+        # pressure - those fields must simply drop out of the packet.
+        Path(self.prom).write_text(
+            "meteo_temperature_celsius 5.5\n"
+            "meteo_last_reading_timestamp_seconds %r\n" % time.time()
+        )
+        proc, lines = self.run_beacon()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(1, len(self.is_weather(lines)), lines)
+        weather = self.is_weather(lines)[0]
+        self.assertIn("t042", weather)
+        # No h../b.. fields: humidity and pressure were never reported.
+        import re
+
+        self.assertIsNone(re.search(r"h\d\d", weather))
+        self.assertIsNone(re.search(r"b\d{5}", weather))
+        self.assertTrue(self.is_telemetry(lines), lines)
+
+    def test_telemetry_disabled_sends_weather_only(self):
+        # METEO-6: wakkanai host telemetry is already beaconed as R2BLN-10.
+        write_prom(self.prom, 5.5, 70.0, 990.2, time.time())
+        proc, lines = self.run_beacon({"APRS_TELEMETRY": "0"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(1, len(self.is_weather(lines)), lines)
+        self.assertEqual([], self.is_telemetry(lines), lines)
+
+    def test_sensor_note_env_replaces_default(self):
+        write_prom(self.prom, 5.5, 70.0, 990.2, time.time())
+        proc, lines = self.run_beacon({"APRS_SENSOR_NOTE": "rtl433 Nexus-TH id=123"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        weather = self.is_weather(lines)[0]
+        self.assertIn("rtl433 Nexus-TH id=123", weather)
+        self.assertNotIn("sensor-in-sun", weather)
 
 
 if __name__ == "__main__":
