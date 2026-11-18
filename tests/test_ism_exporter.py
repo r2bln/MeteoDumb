@@ -116,6 +116,18 @@ class IsmExporterTestCase(unittest.TestCase):
         values = self.read_prom()
         self.assertAlmostEqual(4.5, values["meteo_temperature_celsius"])
 
+    def test_fahrenheit_only_sensor_is_converted(self):
+        # inFactory-TH (the first real sensor around) reports temperature_F only.
+        self.feed(
+            "ISM-261118-183000-433920.txt",
+            [{"time": int(time.time()), "model": "inFactory-TH", "id": 7, "temperature_F": 31.6, "humidity": 92}],
+        )
+        self.start_exporter()
+        time.sleep(1.0)
+        values = self.read_prom()
+        self.assertAlmostEqual((31.6 - 32) * 5 / 9, values["meteo_temperature_celsius"])
+        self.assertAlmostEqual(92, values["meteo_humidity_percent"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

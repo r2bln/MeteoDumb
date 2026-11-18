@@ -68,8 +68,14 @@ def sensor_key(rec):
 
 
 def sensor_reading(rec):
-    """(temp_c, humidity, pressure_pa) - каждое None, если этого поля нет."""
+    """(temp_c, humidity, pressure_pa) - каждое None, если этого поля нет.
+    Часть протоколов rtl_433 отдаёт только Фаренгейт (inFactory-TH и др.),
+    конвертируем в Celsius."""
     temp = rec.get("temperature_C")
+    if temp is None:
+        tf = rec.get("temperature_F")
+        if tf is not None:
+            temp = (tf - 32) * 5 / 9
     hum = rec.get("humidity")
     pres = rec.get("pressure_hPa")
     if pres is None:
