@@ -360,6 +360,15 @@ def build_packet(callsign, lat, lon, reading, comment):
     return f"{callsign}>APRS,TCPIP*:!{position}{wind}{temp}{humidity}{pressure}{comment}"
 
 
+def build_position_packet(callsign, lat, lon, comment):
+    """Position-only beacon: same WX symbol, no weather fields (nothing
+    between the symbol and the comment). Keeps a weather station visible
+    on the map while its sensor is unreadable/stale/implausible - with
+    APRS_TELEMETRY=0 the old degradation was a total silence, which on
+    the map is indistinguishable from a power outage (2026-11-19)."""
+    return f"{callsign}>APRS,TCPIP*:!{format_lat(lat)}/{format_lon(lon)}_{comment}"
+
+
 def send(server, callsign, passcode, packets):
     if TRANSPORT == "http":
         send_http(server, callsign, passcode, packets)
@@ -367,7 +376,7 @@ def send(server, callsign, passcode, packets):
     host, port = server.split(":")
     with socket.create_connection((host, int(port)), timeout=CONNECT_TIMEOUT) as sock:
         f = sock.makefile("rw", encoding="ascii", newline="\r\n")
-        f.write(f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.2\r\n")
+        f.write(f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.3\r\n")
         f.flush()
         f.readline()  # server login banner/ack
         for packet in packets:
@@ -380,7 +389,7 @@ def send_http(server, callsign, passcode, packets):
     the first line after the login and silently drops the rest, so packets go
     out as separate requests. The server answers 200 only for a verified login;
     anything else raises."""
-    login = f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.2\r\n"
+    login = f"user {callsign} pass {passcode} vers MeteoDumb-aprs-beacon 1.3\r\n"
     for packet in packets:
         req = urllib.request.Request(
             f"http://{server}/",
@@ -413,28 +422,37 @@ def main():
     packets = []
 
     if WEATHER:
-        # Unreadable/stale/implausible weather downgrades the run to a
-        # telemetry-only beacon (the METEO-5 packet set) instead of killing
-        # the host telemetry too - the sensor being dead must not silence
-        # T#, and bad values must not reach APRS-IS looking like weather.
+        # Unreadable/stale/implausible weather downgrades the run instead of
+        # killing the beacon: telemetry beacons keep the METEO-5 packet set,
+        # positional weather beacons send position without weather fields.
+        # The sensor being dead must not take the station off the map, and
+        # bad values must not reach APRS-IS looking like weather.
+        weather_ok = False
         try:
             reading = read_reading(PROM_FILE)
         except (OSError, ValueError) as e:
-            log(f"could not read sensor data from {PROM_FILE}: {e} - telemetry only")
+            log(f"could not read sensor data from {PROM_FILE}: {e} - position only")
         else:
             age = time.time() - reading["meteo_last_reading_timestamp_seconds"]
             if age > STALE_AFTER_S:
-                log(f"latest sensor reading is {age:.0f}s old - telemetry only")
+                log(f"latest sensor reading is {age:.0f}s old - position only")
             else:
                 bad = implausible(reading)
                 if bad:
-                    log(f"implausible sensor reading ({'; '.join(bad)}) - telemetry only")
+                    log(f"implausible sensor reading ({'; '.join(bad)}) - position only")
                 else:
+                    weather_ok = True
                     comment_parts = [COMMENT, SENSOR_NOTE, build_sys_status(stats)]
                     comment = " ".join(p for p in comment_parts if p)
                     packets.append(
                         build_packet(CALLSIGN, float(LAT), float(LON), reading, comment)
                     )
+        if not weather_ok:
+            comment_parts = [COMMENT, SENSOR_NOTE, "no sensor data", build_sys_status(stats)]
+            comment = " ".join(p for p in comment_parts if p)
+            packets.append(
+                build_position_packet(CALLSIGN, float(LAT), float(LON), comment)
+            )
 
     if TELEMETRY and stats is not None:
         try:

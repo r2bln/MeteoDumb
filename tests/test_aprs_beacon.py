@@ -19,6 +19,11 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parent.parent / "aprs-beacon.py"
 CALL = "R2BLN-13"
 
+# T# assertions need /proc for host stats (read_host_stats returns None
+# without it); the suite also runs on macOS dev machines, where no
+# telemetry goes out. CI runners are Linux, so there it is still asserted.
+HAS_PROC = os.path.exists("/proc")
+
 
 class FakeAprsIs(threading.Thread):
     """One-shot APRS-IS: accepts one client, answers its login, records lines."""
@@ -95,7 +100,22 @@ class BeaconTestCase(unittest.TestCase):
 
     @staticmethod
     def is_weather(lines):
-        return [l for l in lines if f"{CALL}>APRS,TCPIP*:!" in l]
+        # Position+weather only: the fixed "wind" placeholder is absent from
+        # position-only degraded packets (2026-11-19), which start with the
+        # same "!<lat>/<lon>_" prefix.
+        return [
+            l
+            for l in lines
+            if f"{CALL}>APRS,TCPIP*:!" in l and ".../...g..." in l
+        ]
+
+    @staticmethod
+    def is_position_only(lines):
+        return [
+            l
+            for l in lines
+            if f"{CALL}>APRS,TCPIP*:!" in l and ".../...g..." not in l
+        ]
 
     @staticmethod
     def is_telemetry(lines):
@@ -110,31 +130,39 @@ class BeaconTestCase(unittest.TestCase):
         self.assertIn("t042", weather)  # 5.5C = 41.9F
         self.assertIn("h70", weather)
         self.assertIn("b09902", weather)
-        self.assertTrue(self.is_telemetry(lines), lines)
+        if HAS_PROC:
+            self.assertTrue(self.is_telemetry(lines), lines)
 
-    def test_garbage_values_send_telemetry_only(self):
+    def test_garbage_values_send_position_and_telemetry(self):
         # The 2026-11-13 failure: sensor reads all-ones, values are fresh
         # garbage (+180C / 100% / -179hPa) - must not look like weather.
         write_prom(self.prom, 180.12, 100.0, -179.05, time.time())
         proc, lines = self.run_beacon()
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual([], self.is_weather(lines), lines)
-        self.assertTrue(self.is_telemetry(lines), lines)
+        self.assertEqual(1, len(self.is_position_only(lines)), lines)
+        self.assertIn("no sensor data", self.is_position_only(lines)[0])
+        if HAS_PROC:
+            self.assertTrue(self.is_telemetry(lines), lines)
         self.assertIn("implausible", proc.stderr)
 
-    def test_stale_reading_sends_telemetry_only(self):
+    def test_stale_reading_sends_position_and_telemetry(self):
         write_prom(self.prom, 5.5, 70.0, 990.2, time.time() - 3600)
         proc, lines = self.run_beacon()
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual([], self.is_weather(lines), lines)
-        self.assertTrue(self.is_telemetry(lines), lines)
+        self.assertEqual(1, len(self.is_position_only(lines)), lines)
+        if HAS_PROC:
+            self.assertTrue(self.is_telemetry(lines), lines)
         self.assertIn("old", proc.stderr)
 
-    def test_missing_prom_file_sends_telemetry_only(self):
+    def test_missing_prom_file_sends_position_and_telemetry(self):
         proc, lines = self.run_beacon()  # self.prom never written
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual([], self.is_weather(lines), lines)
-        self.assertTrue(self.is_telemetry(lines), lines)
+        self.assertEqual(1, len(self.is_position_only(lines)), lines)
+        if HAS_PROC:
+            self.assertTrue(self.is_telemetry(lines), lines)
 
     def test_temperature_only_sends_weather_without_hb(self):
         # METEO-6: ISM sensors rarely report humidity and almost never
@@ -153,7 +181,8 @@ class BeaconTestCase(unittest.TestCase):
 
         self.assertIsNone(re.search(r"h\d\d", weather))
         self.assertIsNone(re.search(r"b\d{5}", weather))
-        self.assertTrue(self.is_telemetry(lines), lines)
+        if HAS_PROC:
+            self.assertTrue(self.is_telemetry(lines), lines)
 
     def test_telemetry_disabled_sends_weather_only(self):
         # METEO-6: wakkanai host telemetry is already beaconed as R2BLN-10.
@@ -162,6 +191,31 @@ class BeaconTestCase(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(1, len(self.is_weather(lines)), lines)
         self.assertEqual([], self.is_telemetry(lines), lines)
+        self.assertEqual([], self.is_position_only(lines), lines)
+
+    def test_stale_sensor_position_only_when_telemetry_disabled(self):
+        # The 2026-11-19 failure: R2BLN-13 (APRS_TELEMETRY=0) with a dead ISM
+        # pipeline went completely silent - "nothing to send" - and vanished
+        # from the map. A positional weather beacon must keep beaconing its
+        # position without weather fields instead.
+        write_prom(self.prom, 5.5, 70.0, 990.2, time.time() - 3600)
+        proc, lines = self.run_beacon({"APRS_TELEMETRY": "0"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([], self.is_weather(lines), lines)
+        self.assertEqual([], self.is_telemetry(lines), lines)
+        position = self.is_position_only(lines)
+        self.assertEqual(1, len(position), lines)
+        self.assertIn("no sensor data", position[0])
+        # Same WX symbol as the weather packet, no weather fields after it.
+        self.assertRegex(position[0], r"!5555\.97N/03601\.11E_")
+        self.assertNotIn("t042", position[0])
+
+    def test_missing_sensor_position_only_when_telemetry_disabled(self):
+        # Same as above, prom file never written at all (ism-exporter down).
+        proc, lines = self.run_beacon({"APRS_TELEMETRY": "0"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([], self.is_weather(lines), lines)
+        self.assertEqual(1, len(self.is_position_only(lines)), lines)
 
     def test_sensor_note_env_replaces_default(self):
         write_prom(self.prom, 5.5, 70.0, 990.2, time.time())
